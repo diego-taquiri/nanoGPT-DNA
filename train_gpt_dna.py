@@ -119,13 +119,20 @@ elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
 print(f"using device: {device}")
 device = "cpu" # OVERRIDE
 
+# Load chromosome 21 from the HG38 genome dataset
+with open('data/chr21.fa') as file:
+    sequence = ''.join(line.strip() for line in file if not line.startswith('>'))
+sequence = sequence[6000000:]
+# Create a mapping of unique nucleotides (A, T, C, G) and N to integers
+chars = sorted(list(set(sequence)))
+stoi = {s: i for i, s in enumerate(chars)}  # Mapping from characters to integers
+itos = {i: s for i, s in enumerate(chars)}  # Reverse mapping from integers to characters
+# Define encoder and decoder
+encode = lambda s: [stoi[c] for c in s] 
+decode = lambda l: ''.join([itos[i] for i in l]) 
+sequence = sequence[:1000]
+tokens = encode(sequence) #tokenize dna sequence
 # get a data batch
-import tiktoken
-enc = tiktoken.get_encoding('gpt2')
-with open('input.txt', 'r') as f:
-    text = f.read()
-text = text[:1000]
-tokens = enc.encode(text)
 B, T = 4, 32
 buf = torch.tensor(tokens[:B*T + 1])
 x = buf[:-1].view(B, T)
