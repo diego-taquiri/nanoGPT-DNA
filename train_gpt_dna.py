@@ -112,6 +112,42 @@ class GPT(nn.Module):
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
         return logits, loss
 
+class DataLoaderLite:
+    def __init__(self, B, T):
+        self.B = B
+        self.T = T
+
+        # at init load tokens from disk and store them in memory
+        with open('data/chr21.fa') as file: #chromosome 21 from the HG38
+            sequence = ''.join(line.strip() for line in file if not line.startswith('>'))
+        sequence = sequence[6000000:] #for now, lets not train on 6 million "N" of I guess the telomere end 
+        # Create a mapping of unique nucleotides A, T, C, G and N to integers
+        chars = sorted(list(set(sequence)))
+        stoi = {s: i for i, s in enumerate(chars)}  # Mapping from characters to integers
+        itos = {i: s for i, s in enumerate(chars)}  # Reverse mapping from integers to characters
+        encode = lambda s: [stoi[c] for c in s] 
+        decode = lambda l: ''.join([itos[i] for i in l]) 
+        tokens = encode(sequence) #tokenize dna sequence
+
+        self.tokens = torch.tensor(tokens)
+        print(f"loaded {len(self.tokens)} tokens")
+        print(f"1 epoch = {len(self.tokens) // (B * T)} batches")
+        
+        # state
+        self.current_position = 0
+
+    def next_batch(self):
+        B, T = self.B, self.T
+        buf = self.tokens[self.current_position : self.current_position+B*T+1]
+        x = (buf[:-1]).view(B, T) # inputs
+        y = (buf[1:]).view(B, T) # targets
+        # advance the position in the tensor
+        self.current_position += B * T
+        # if loading the next batch would be out of bounds, reset
+        if self.current_position + (B * T + 1) > len(self.tokens):
+            self.current_position = 0
+        return x, y
+
 # -----------------------------------------------------------------------------
 # attempt to autodetect the device
 device = "cpu"
@@ -121,25 +157,7 @@ elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
     device = "mps"
 print(f"using device: {device}")
 
-# Load chromosome 21 from the HG38 genome dataset
-with open('data/chr21.fa') as file:
-    sequence = ''.join(line.strip() for line in file if not line.startswith('>'))
-sequence = sequence[6000000:]
-# Create a mapping of unique nucleotides (A, T, C, G) and N to integers
-chars = sorted(list(set(sequence)))
-stoi = {s: i for i, s in enumerate(chars)}  # Mapping from characters to integers
-itos = {i: s for i, s in enumerate(chars)}  # Reverse mapping from integers to characters
-# Define encoder and decoder
-encode = lambda s: [stoi[c] for c in s] 
-decode = lambda l: ''.join([itos[i] for i in l]) 
-sequence = sequence[:1000]
-tokens = encode(sequence) #tokenize dna sequence
-# get a data batch
-B, T = 4, 32
-buf = torch.tensor(tokens[:B*T + 1])
-buf = buf.to(device)
-x = buf[:-1].view(B, T)
-y = buf[1:].view(B, T)
+train_loader = DataLoaderLite(B=4, T=32)
 
 # get logits
 model = GPT(GPTConfig())
@@ -148,6 +166,8 @@ model.to(device)
 # optimize!
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
 for i in range(50):
+    x, y = train_loader.next_batch()
+    x, y = x.to(device), y.to(device)
     optimizer.zero_grad()
     logits, loss = model(x, y)
     loss.backward()
