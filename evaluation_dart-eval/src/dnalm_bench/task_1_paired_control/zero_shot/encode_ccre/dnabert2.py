@@ -15,20 +15,22 @@ if __name__ == "__main__":
     out_dir = os.path.join(work_dir, f"task_1_ccre/zero_shot_outputs/likelihoods/{model_name}")
 
     chroms = [
-        "chr5",
-        "chr10",
-        "chr14",
-        "chr18",
-        "chr20",
-        "chr22"
+        #"chr5",
+        #"chr10",
+        #"chr14",
+        #"chr18",
+        #"chr20",
+        #"chr22"
+        "chr21"
     ]
 
-    batch_size = 4096
+    batch_size = 256
     num_workers = 4
     seed = 0
     device = "cuda"
 
-    dataset = PairedControlDataset(genome_fa, elements_tsv, chroms, seed)
+    max_elements = 128  # Limit to X sequences for testing, instead of default >1 million sequences
+    dataset = PairedControlDataset(genome_fa, elements_tsv, chroms, seed, max_elements=max_elements)
     evaluator = DNABERT2Evaluator(model_name, dataset, batch_size, num_workers, device)
     metrics = evaluator.evaluate(out_dir, progress_bar=True)
 

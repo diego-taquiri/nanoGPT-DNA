@@ -34,7 +34,11 @@ class PairedControlDataset(Dataset):
         self.seed = seed
 
         self.elements_df = self._load_elements(elements_tsv, chroms)
-
+        
+        if max_elements is not None:
+            np.random.seed(seed)
+            self.elements_df = self.elements_df.sample(n=max_elements, seed=seed)
+        
         if cache_dir is not None:
             os.makedirs(cache_dir, exist_ok=True)
 
