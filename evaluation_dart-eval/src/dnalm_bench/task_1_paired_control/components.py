@@ -28,13 +28,15 @@ class PairedControlDataset(Dataset):
 
     _seed_upper = 2**128
 
-    def __init__(self, genome_fa, elements_tsv, chroms, seed, cache_dir=None):
+    def __init__(self, genome_fa, elements_tsv, chroms, seed, max_elements=None, cache_dir=None):
         super().__init__()
 
         self.seed = seed
 
+        # Load elements first
         self.elements_df = self._load_elements(elements_tsv, chroms)
         
+        # Add max_elements handling here
         if max_elements is not None:
             np.random.seed(seed)
             self.elements_df = self.elements_df.sample(n=max_elements, seed=seed)
