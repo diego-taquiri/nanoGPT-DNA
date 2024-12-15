@@ -75,11 +75,11 @@ class Block(nn.Module):
 
 @dataclass
 class GPTConfig:
-    block_size: int = 256 # max sequence length
-    vocab_size: int = 5 # number of tokens: 50,000 BPE merges + 256 bytes tokens + 1 <|endoftext|> token
-    n_layer: int = 6 # number of layers
-    n_head: int = 6 # number of heads
-    n_embd: int = 384 # embedding dimension
+    block_size: int = 4096  # Increase from 256 to handle longer sequences
+    vocab_size: int = 5
+    n_layer: int = 6
+    n_head: int = 6
+    n_embd: int = 384
 
 class GPT(nn.Module):
 
@@ -100,6 +100,10 @@ class GPT(nn.Module):
 
         # init params
         self.apply(self._init_weights)
+
+        # Enable gradient checkpointing for memory efficiency
+        self.gradient_checkpointing = True
+
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
             std = 0.02
@@ -168,45 +172,47 @@ class DataLoaderLite:
         return x, y
 
 # -----------------------------------------------------------------------------
-# attempt to autodetect the device
-device = "cpu"
-if torch.cuda.is_available():
-    device = "cuda"
-elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-    device = "mps"
-print(f"using device: {device}")
 
-torch.manual_seed(1337)
-if torch.cuda.is_available():
-    torch.cuda.manual_seed(1337)
+if __name__ == "__main__":
+    # attempt to autodetect device
+    device = "cpu"
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        device = "mps"
+    print(f"using device: {device}")
 
-train_loader = DataLoaderLite(B=4, T=32)
+    torch.manual_seed(1337)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(1337)
 
-# get logits
-model = GPT(GPTConfig())
-model.to(device)
+    train_loader = DataLoaderLite(B=4, T=32)
 
-# optimize!
-optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+    # get logits
+    model = GPT(GPTConfig())
+    model.to(device)
 
-# create the log directory
-log_dir = "log"
-os.makedirs(log_dir, exist_ok=True)
+    # optimize!
+    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
 
-for i in range(50):
-    x, y = train_loader.next_batch()
-    x, y = x.to(device), y.to(device)
-    optimizer.zero_grad()
-    logits, loss = model(x, y)
-    loss.backward()
-    optimizer.step()
-    print(f"step {i}, loss: {loss.item()}")
+    # create the log directory
+    log_dir = "log"
+    os.makedirs(log_dir, exist_ok=True)
 
-# Save final model
-out = {
-    'model': model.state_dict(),
-    'config': model.config,
-}
-model_path = os.path.join(log_dir, "model.pt")
-torch.save(out, model_path)
-print(f"saved model to {model_path}")
+    for i in range(10000):
+        x, y = train_loader.next_batch()
+        x, y = x.to(device), y.to(device)
+        optimizer.zero_grad()
+        logits, loss = model(x, y)
+        loss.backward()
+        optimizer.step()
+        print(f"step {i}, loss: {loss.item()}")
+
+    # Save final model
+    out = {
+        'model': model.state_dict(),
+        'config': model.config,
+    }
+    model_path = os.path.join(log_dir, "model.pt")
+    torch.save(out, model_path)
+    print(f"saved model to {model_path}")

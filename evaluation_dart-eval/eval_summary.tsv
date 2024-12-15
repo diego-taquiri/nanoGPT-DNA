@@ -1,0 +1,4 @@
+model   accuracy
+DNA-BERT2  0.875
+nanoGPT-first-10ksteps  0.531
+nanoGPT-first-1step  0.5

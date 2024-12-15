@@ -12,6 +12,14 @@ from tqdm import tqdm
 
 from ..components import PairedControlDataset
 from ...utils import onehot_to_chars, NoModule
+from train_gpt_dna import GPT, GPTConfig  # Import the model classes
+
+def load_checkpoint(path):
+    checkpoint = torch.load(path)
+    config = checkpoint['config']
+    model = GPT(config)
+    model.load_state_dict(checkpoint['model'])
+    return model
 
 class MaskedZeroShotScore(metaclass=ABCMeta):
     @property
@@ -297,3 +305,55 @@ class NTEvaluator(HFZeroShotEvaluator, MaskedZeroShotScore):
     @property
     def end_token(self):
         return None
+
+
+class DNAGPTEvaluator(ZeroShotPairedControlEvaluator, CausalZeroShotScore):
+    def __init__(self, model_path, dataset, batch_size, num_workers, device):
+        model = load_checkpoint(model_path)
+        model.to(device)
+        self.model = model
+        self.block_size = model.config.block_size
+        super().__init__(dataset, batch_size, num_workers, device)
+
+    def tokenize(self, seqs):
+        tokens = torch.argmax(seqs, dim=-1).to(self.device)
+        
+        batch_size = tokens.shape[0]
+        starts = torch.zeros(batch_size, dtype=torch.long)
+        ends = torch.tensor([tokens.shape[1]] * batch_size, dtype=torch.long)
+        
+        attention_mask = None
+        
+        return tokens, starts, ends, attention_mask
+
+    def model_fwd(self, tokens_in, attention_mask, tokens_out):
+        with torch.no_grad():
+            B, T = tokens_in.size()
+            if T > self.block_size:
+                chunk_size = self.block_size
+                stride = chunk_size // 2
+                lls = torch.zeros_like(tokens_in, dtype=torch.float, device=tokens_in.device)
+                count = torch.zeros_like(tokens_in, dtype=torch.float, device=tokens_in.device)
+                
+                for b in range(B):
+                    for start in range(0, T - stride, stride):
+                        end = min(start + chunk_size, T)
+                        chunk_in = tokens_in[b:b+1, start:end]
+                        chunk_out = tokens_out[b:b+1, start:end]
+                        
+                        if hasattr(torch.cuda, 'empty_cache'):
+                            torch.cuda.empty_cache()
+                            
+                        logits, _ = self.model(chunk_in)
+                        logits = logits.swapaxes(1, 2)
+                        chunk_lls = -F.cross_entropy(logits, chunk_out, reduction='none')
+                        lls[b:b+1, start:end] += chunk_lls
+                        count[b:b+1, start:end] += 1
+                
+                lls = lls / count.clamp(min=1)
+            else:
+                logits, _ = self.model(tokens_in)
+                logits = logits.swapaxes(1, 2)
+                lls = -F.cross_entropy(logits, tokens_out, reduction='none')
+            
+            return lls

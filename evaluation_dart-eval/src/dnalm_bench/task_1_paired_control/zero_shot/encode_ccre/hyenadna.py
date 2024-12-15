@@ -1,37 +1,35 @@
 import os
 
-from ..evaluators import PairedControlDataset, DNABERT2Evaluator
+from ..evaluators import PairedControlDataset, HDEvaluator
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 work_dir = os.environ.get("DART_WORK_DIR", "")
 
 if __name__ == "__main__":
-    model_name = "DNABERT-2-117M"
-
+    model_name = "hyenadna-large-1m-seqlen-hf"
+    
     genome_fa = os.path.join(work_dir, "refs/GRCh38_no_alt_analysis_set_GCA_000001405.15.fasta")
     elements_tsv = os.path.join(work_dir, f"task_1_ccre/processed_inputs/ENCFF420VPZ_processed.tsv")
 
     out_dir = os.path.join(work_dir, f"task_1_ccre/zero_shot_outputs/likelihoods/{model_name}")
 
     chroms = [
-        #"chr5",
-        #"chr10",
-        #"chr14",
-        #"chr18",
-        #"chr20",
-        #"chr22"
-        "chr21"
+        "chr5",
+        "chr10",
+        "chr14",
+        "chr18",
+        "chr20",
+        "chr22"
     ]
 
-    batch_size = 32 # 256 before
+    batch_size = 4096
     num_workers = 4
     seed = 0
     device = "cuda"
 
-    max_elements = 128  # Limit to X sequences for testing, instead of default >1 million sequences
-    dataset = PairedControlDataset(genome_fa, elements_tsv, chroms, seed, max_elements=max_elements)
-    evaluator = DNABERT2Evaluator(model_name, dataset, batch_size, num_workers, device)
+    dataset = PairedControlDataset(genome_fa, elements_tsv, chroms, seed)
+    evaluator = HDEvaluator(model_name, dataset, batch_size, num_workers, device)
     metrics = evaluator.evaluate(out_dir, progress_bar=True)
 
     for k, v in metrics.items():
