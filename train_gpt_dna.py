@@ -176,6 +176,8 @@ class DataLoaderLite:
 
 if __name__ == "__main__":
     # attempt to autodetect device
+    import time
+
     device = "cpu"
     if torch.cuda.is_available():
         device = "cuda"
@@ -189,6 +191,8 @@ if __name__ == "__main__":
 
     train_loader = DataLoaderLite(B=16, T=1024)
 
+    #torch.set_float32_matmul_precision('high')
+
     # get logits
     model = GPT(GPTConfig())
     model.to(device)
@@ -200,15 +204,21 @@ if __name__ == "__main__":
     log_dir = "log"
     os.makedirs(log_dir, exist_ok=True)
 
-    for i in range(1000):
+    for i in range(50):
+        t0 = time.time()
         x, y = train_loader.next_batch()
         x, y = x.to(device), y.to(device)
         optimizer.zero_grad()
-        logits, loss = model(x, y)
+        with torch.autocast(device_type=device, dtype=torch.bfloat16):
+            logits, loss = model(x, y)
         #import code; code.interact(local=locals())
         loss.backward()
         optimizer.step()
-        print(f"step {i}, loss: {loss.item()}")
+        torch.cuda.synchronize() # wait for the GPU to finish work
+        t1 = time.time()
+        dt = (t1 - t0)*1000 # time difference in miliseconds
+        tokens_per_sec = (train_loader.B * train_loader.T) / (t1 - t0)
+        print(f"step {i}, loss: {loss.item()}, dt: {dt:.2f}ms, tok/sec: {tokens_per_sec:.2f}")
 
     # Save final model
     out = {
