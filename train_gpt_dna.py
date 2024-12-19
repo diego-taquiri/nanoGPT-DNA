@@ -75,11 +75,11 @@ class Block(nn.Module):
 
 @dataclass
 class GPTConfig:
-    block_size: int = 4096  # Increase from 256 to handle longer sequences
+    block_size: int = 1024  # Increase from 256 to handle longer sequences
     vocab_size: int = 5
-    n_layer: int = 6
-    n_head: int = 6
-    n_embd: int = 384
+    n_layer: int = 12
+    n_head: int = 12
+    n_embd: int = 768
 
 class GPT(nn.Module):
 
@@ -141,9 +141,10 @@ class DataLoaderLite:
         self.T = T
 
         # at init load tokens from disk and store them in memory
+        #with open('data/hg38.ml.fa') as file: #entire human genome
         with open('data/chr21.fa') as file: #chromosome 21 from the HG38
             sequence = ''.join(line.strip() for line in file if not line.startswith('>'))
-        sequence = sequence[6000000:] #for now, lets not train on 6 million "N" of I guess the telomere end 
+            sequence = sequence[6000000:] #for now, lets not train on 6 million "N" of I guess the telomere end 
         # Create a mapping of unique nucleotides A, T, C, G and N to integers
         chars = sorted(list(set(sequence)))
         stoi = {s: i for i, s in enumerate(chars)}  # Mapping from characters to integers
@@ -186,7 +187,7 @@ if __name__ == "__main__":
     if torch.cuda.is_available():
         torch.cuda.manual_seed(1337)
 
-    train_loader = DataLoaderLite(B=4, T=32)
+    train_loader = DataLoaderLite(B=16, T=1024)
 
     # get logits
     model = GPT(GPTConfig())
@@ -199,11 +200,12 @@ if __name__ == "__main__":
     log_dir = "log"
     os.makedirs(log_dir, exist_ok=True)
 
-    for i in range(10000):
+    for i in range(1000):
         x, y = train_loader.next_batch()
         x, y = x.to(device), y.to(device)
         optimizer.zero_grad()
         logits, loss = model(x, y)
+        #import code; code.interact(local=locals())
         loss.backward()
         optimizer.step()
         print(f"step {i}, loss: {loss.item()}")

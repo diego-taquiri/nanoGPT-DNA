@@ -1,4 +1,8 @@
 model   accuracy
 DNA-BERT2  0.875
+model-1k-T1024-chr21-85M
+model-1k-T1024-allgenome  0.5468
+nanoGPT-first-10ksteps-T1024  0.484
+nanoGPT-first-100ksteps  0.531
 nanoGPT-first-10ksteps  0.531
 nanoGPT-first-1step  0.5
