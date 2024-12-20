@@ -28,7 +28,7 @@ if __name__ == "__main__":
     seed = 0
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    max_elements = 128  # Limit for testing
+    max_elements = 1024  # Limit for testing, prev 128
     model_path = "log/model.pt" 
     dataset = PairedControlDataset(genome_fa, elements_tsv, chroms, seed, max_elements=max_elements)
     evaluator = DNAGPTEvaluator(model_path, dataset, batch_size, num_workers, device)

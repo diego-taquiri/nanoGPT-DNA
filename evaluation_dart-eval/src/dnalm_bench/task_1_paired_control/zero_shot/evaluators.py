@@ -18,7 +18,18 @@ def load_checkpoint(path):
     checkpoint = torch.load(path)
     config = checkpoint['config']
     model = GPT(config)
-    model.load_state_dict(checkpoint['model'])
+    
+    # Remove "_orig_mod." prefix from state dict keys
+    state_dict = checkpoint['model']
+    fixed_state_dict = {}
+    for key in state_dict:
+        if key.startswith('_orig_mod.'):
+            fixed_key = key.replace('_orig_mod.', '')
+            fixed_state_dict[fixed_key] = state_dict[key]
+        else:
+            fixed_state_dict[key] = state_dict[key]
+            
+    model.load_state_dict(fixed_state_dict)
     return model
 
 class MaskedZeroShotScore(metaclass=ABCMeta):
@@ -328,32 +339,8 @@ class DNAGPTEvaluator(ZeroShotPairedControlEvaluator, CausalZeroShotScore):
 
     def model_fwd(self, tokens_in, attention_mask, tokens_out):
         with torch.no_grad():
-            B, T = tokens_in.size()
-            if T > self.block_size:
-                chunk_size = self.block_size
-                stride = chunk_size // 2
-                lls = torch.zeros_like(tokens_in, dtype=torch.float, device=tokens_in.device)
-                count = torch.zeros_like(tokens_in, dtype=torch.float, device=tokens_in.device)
-                
-                for b in range(B):
-                    for start in range(0, T - stride, stride):
-                        end = min(start + chunk_size, T)
-                        chunk_in = tokens_in[b:b+1, start:end]
-                        chunk_out = tokens_out[b:b+1, start:end]
-                        
-                        if hasattr(torch.cuda, 'empty_cache'):
-                            torch.cuda.empty_cache()
-                            
-                        logits, _ = self.model(chunk_in)
-                        logits = logits.swapaxes(1, 2)
-                        chunk_lls = -F.cross_entropy(logits, chunk_out, reduction='none')
-                        lls[b:b+1, start:end] += chunk_lls
-                        count[b:b+1, start:end] += 1
-                
-                lls = lls / count.clamp(min=1)
-            else:
-                logits, _ = self.model(tokens_in)
-                logits = logits.swapaxes(1, 2)
-                lls = -F.cross_entropy(logits, tokens_out, reduction='none')
-            
-            return lls
+            logits, _ = self.model(tokens_in)
+            logits = logits.swapaxes(1, 2)
+            lls = torch.zeros(tokens_out.shape[:2], device=self.device)
+            lls[:,1:] = -F.cross_entropy(logits[:,:,:-1], tokens_out[:,1:], reduction="none")
+        return lls

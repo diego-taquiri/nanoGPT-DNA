@@ -7,3 +7,5 @@ log/
 */hg38.ml.fa
 
 notebooks/
+
+evaluators-smallcontext.py

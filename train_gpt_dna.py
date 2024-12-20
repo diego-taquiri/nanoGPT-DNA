@@ -71,7 +71,7 @@ class Block(nn.Module):
 
 @dataclass
 class GPTConfig:
-    block_size: int = 1024  # Increase from 256 to handle longer sequences
+    block_size: int = 4096  # Increase from 256 to handle longer sequences
     vocab_size: int = 5
     n_layer: int = 12
     n_head: int = 12
@@ -137,10 +137,10 @@ class DataLoaderLite:
         self.T = T
 
         # at init load tokens from disk and store them in memory
-        #with open('data/hg38.ml.fa') as file: #entire human genome
-        with open('data/chr21.fa') as file: #chromosome 21 from the HG38
+        with open('data/hg38.ml.fa') as file: #entire human genome
+        #with open('data/chr21.fa') as file: #chromosome 21 from the HG38
             sequence = ''.join(line.strip() for line in file if not line.startswith('>'))
-            sequence = sequence[6000000:] #for now, lets not train on 6 million "N" of I guess the telomere end 
+            #sequence = sequence[6000000:] #for now, lets not train on 6 million "N" of I guess the telomere end 
         # Create a mapping of unique nucleotides A, T, C, G and N to integers
         chars = sorted(list(set(sequence)))
         stoi = {s: i for i, s in enumerate(chars)}  # Mapping from characters to integers
@@ -185,12 +185,12 @@ if __name__ == "__main__":
     if torch.cuda.is_available():
         torch.cuda.manual_seed(1337)
 
-    train_loader = DataLoaderLite(B=16, T=1024)
+    train_loader = DataLoaderLite(B=32, T=1024)
 
     #torch.set_float32_matmul_precision('high')
 
     # get logits
-    model = GPT(GPTConfig(vocab_size=6))
+    model = GPT(GPTConfig())
     model.to(device)
     model = torch.compile(model)
 
@@ -200,8 +200,13 @@ if __name__ == "__main__":
     # create the log directory
     log_dir = "log"
     os.makedirs(log_dir, exist_ok=True)
+    tsv_path = os.path.join(log_dir, "training_loss.tsv")
+    
+    # Create/overwrite TSV file with headers
+    with open(tsv_path, 'w') as f:
+        f.write("step\tloss\n")
 
-    for i in range(50):
+    for i in range(180000):
         t0 = time.time()
         x, y = train_loader.next_batch()
         x, y = x.to(device), y.to(device)
@@ -215,6 +220,11 @@ if __name__ == "__main__":
         t1 = time.time()
         dt = (t1 - t0)*1000 # time difference in miliseconds
         tokens_per_sec = (train_loader.B * train_loader.T) / (t1 - t0)
+        
+        # Add this: Log the step and loss to TSV file
+        with open(tsv_path, 'a') as f:
+            f.write(f"{i}\t{loss.item()}\n")
+            
         print(f"step {i}, loss: {loss.item()}, dt: {dt:.2f}ms, tok/sec: {tokens_per_sec:.2f}")
 
     # Save final model
