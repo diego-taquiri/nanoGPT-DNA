@@ -1,5 +1,6 @@
-model   accuracy
-DNA-BERT2  0.875
+model   accuracy    pval
+DNA-BERT2  0.875   1.1204529889120055e-18
+241220_model-360k-T1024-B16-Block4096-hyperparams-allgenome 0.5244140625    0.01002890917847463
 241219_model-180k-T1024-B32-C4096-allgenome.pt  0.499
 241219_model-360k-T1024-allgenome   0.554
 model-1k-T1024-chr21-85M    0.546875
