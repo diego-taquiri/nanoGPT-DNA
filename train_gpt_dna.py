@@ -156,7 +156,8 @@ class GPT(nn.Module):
         use_fused = fused_available and 'cuda' in device
         if master_process:
             print(f"using fused AdamW: {use_fused}")
-        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=(0.9, 0.95), eps=1e-8, fused=use_fused)
+        #optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=(0.9, 0.95), eps=1e-8, fused=use_fused)
+        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=(0.9, 0.999), eps=1e-8, fused=use_fused)
         return optimizer
 
 
@@ -242,7 +243,8 @@ if __name__ == "__main__":
         torch.cuda.manual_seed(1337)
 
     #total_batch_size = 524288 # 2**19, ~0.5M, in number of tokens
-    total_batch_size = 589824  # Adjusted to be divisible by B * T * ddp_world_size, 48 * 1024 * 2
+    #total_batch_size = 589824  # Adjusted to be divisible by B * T * ddp_world_size, 48 * 1024 * 2
+    total_batch_size = 1179648 #2**20 #2^20, ~1M, in number of tokens,  48 * 1024 * 2 * 12
     B = 48 # micro batch size
     T = 1024 # sequence length
     assert total_batch_size % (B * T * ddp_world_size) == 0, "make sure total_batch_size is divisible by B * T * ddp_world_size"
@@ -263,10 +265,10 @@ if __name__ == "__main__":
         model = DDP(model, device_ids=[ddp_local_rank])
         raw_model = model.module if ddp else model # always contains the "raw" unwrapped model
 
-    max_lr = 6e-4
-    min_lr = max_lr * 0.1
-    warmup_steps = 10
-    max_steps =  94700 #13000 #360000
+    max_lr = 1e-4 #6e-4
+    min_lr = max_lr * 0.5 # * 0.1
+    warmup_steps = 4735 # 10% of the total steps
+    max_steps =  47350 #94700 #13000 #360000
     def get_lr(it):
         # 1) linear warmup for warmup_iters steps
         if it < warmup_steps:
@@ -281,7 +283,7 @@ if __name__ == "__main__":
         return min_lr + coeff * (max_lr - min_lr)
 
     # optimize!
-    optimizer = raw_model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, device=device)
+    optimizer = raw_model.configure_optimizers(weight_decay=0.1, learning_rate=1e-4, device=device)
 
     # create the log directory
     log_dir = "log"
@@ -323,7 +325,7 @@ if __name__ == "__main__":
         if master_process:
             print(f"step {step:4d} | loss: {loss_accum.item():.6f} | lr {lr:.4e} | norm: {norm:.4f} | dt: {dt*1000:.2f}ms | tok/sec: {tokens_per_sec:.2f}")
             with open(tsv_path, 'a') as f:
-                f.write(f"{step}\t{loss.item()}\t{norm:.4f}\t{lr:.4e}\n")
+                f.write(f"{step}\t{loss_accum.item()}\t{norm:.4f}\t{lr:.4e}\n")
     if ddp:
         destroy_process_group()    
 
