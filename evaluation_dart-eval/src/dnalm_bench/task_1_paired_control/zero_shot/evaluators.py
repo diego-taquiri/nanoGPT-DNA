@@ -19,15 +19,16 @@ def load_checkpoint(path):
     config = checkpoint['config']
     model = GPT(config)
     
-    # Remove "_orig_mod." prefix from state dict keys
+    # Remove both "module." and "_orig_mod." prefixes from state dict keys
     state_dict = checkpoint['model']
     fixed_state_dict = {}
     for key in state_dict:
-        if key.startswith('_orig_mod.'):
-            fixed_key = key.replace('_orig_mod.', '')
-            fixed_state_dict[fixed_key] = state_dict[key]
-        else:
-            fixed_state_dict[key] = state_dict[key]
+        new_key = key
+        if new_key.startswith('module.'):
+            new_key = new_key[7:]  # len('module.') == 7
+        if new_key.startswith('_orig_mod.'):
+            new_key = new_key[10:]  # len('_orig_mod.') == 10
+        fixed_state_dict[new_key] = state_dict[key]
             
     model.load_state_dict(fixed_state_dict)
     return model
