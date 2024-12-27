@@ -3,7 +3,7 @@
 The simplest, fastest repository for training a small GPT on DNA sequences. It is inspired by [nanoGPT](https://github.com/karpathy/nanoGPT) by Andrej Karpathy, repurposed to explore the fascinating regulatory syntax of DNA. The goal here is to train a transformer model, much like nanoGPT, but not on Shakespeare or WebText—instead, on the human genome hg38. The model will learn the syntax and language of DNA, and help us uncover the intricate code underlying biological regulation. Work in progress!
 
 # Early Results
-
+dddd
 ![Figure 1](/figures/output.png)
 
 **Figure 1:** Training Loss Curve During Pre-Training
