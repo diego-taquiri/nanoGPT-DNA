@@ -7,6 +7,8 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 import os
+import pandas as pd
+from pyfaidx import Fasta
 
 # -----------------------------------------------------------------------------
 
@@ -162,43 +164,87 @@ class GPT(nn.Module):
 
 
 class DataLoaderLite:
-    def __init__(self, B, T, process_rank, num_processes):
+    def __init__(self, B, T, process_rank, num_processes, bed_path="data/human-sequences.bed", fasta_path="data/hg38.ml.fa"):
+        """
+        B: micro-batch size (# of sequences per batch)
+        T: sequence length (1024)
+        process_rank: index of current process (for DDP)
+        num_processes: total number of processes (for DDP)
+        bed_path: path to BED file specifying [chr, start, end, type]
+        fasta_path: path to FASTA file containing the reference genome
+        """
         self.B = B
         self.T = T
         self.process_rank = process_rank
         self.num_processes = num_processes
 
-        # at init load tokens from disk and store them in memory
-        with open('data/hg38.ml.fa') as file: #entire human genome
-        #with open('data/chr21.fa') as file: #chromosome 21 from the HG38
-            sequence = ''.join(line.strip() for line in file if not line.startswith('>'))
-            #sequence = sequence[6000000:] #for now, lets not train on 6 million "N" of I guess the telomere end 
-        # Create a mapping of unique nucleotides A, T, C, G and N to integers
-        chars = sorted(list(set(sequence)))
-        stoi = {s: i for i, s in enumerate(chars)}  # Mapping from characters to integers
-        #itos = {i: s for i, s in enumerate(chars)}  # Reverse mapping from integers to characters
-        encode = lambda s: [stoi[c] for c in s] 
-        #decode = lambda l: ''.join([itos[i] for i in l]) 
-        tokens = encode(sequence) #tokenize dna sequence
+        # Load BED file and process regions
+        df = pd.read_csv(bed_path, sep='\t', header=None, names=['chrom', 'start', 'end', 'type'])
+        self.chunks = []
+        for _, row in df.iterrows():
+            chrom, start, end, _type = row
+            region_length = end - start
+            if region_length < self.T:
+                continue
+            num_chunks = region_length // self.T
+            for i in range(num_chunks):
+                chunk_start = start + i * self.T
+                chunk_end = chunk_start + self.T
+                self.chunks.append((chrom, chunk_start, chunk_end))
 
-        self.tokens = torch.tensor(tokens)
-        if master_process:
-            print(f"loaded {len(self.tokens)} tokens")
-        
-        # state
-        self.current_position = self.B * self.T * self.process_rank
+        # Initialize FASTA reader
+        self.fasta = Fasta(fasta_path, as_raw=True, sequence_always_upper=True)
+
+        # Create DNA -> integer mapping
+        chars = ['A', 'C', 'G', 'N', 'T']
+        self.stoi = {ch: i for i, ch in enumerate(chars)}
+
+        # Set starting chunk for this process
+        self.current_chunk = self.process_rank * self.B
+
+        if 'master_process' in globals() and master_process:
+            print(f"DataLoaderLite: loaded {len(self.chunks)} total 1024bp chunks from BED regions.")
+
+    def _encode_sequence(self, seq):
+        """Convert DNA sequence to integer tokens"""
+        out = []
+        for ch in seq:
+            if ch in self.stoi:
+                out.append(self.stoi[ch])
+            else:
+                out.append(self.stoi['N'])
+        return out
 
     def next_batch(self):
+        """Returns x, y tensors of shape (B, T) for training"""
         B, T = self.B, self.T
-        buf = self.tokens[self.current_position : self.current_position+B*T+1]
-        x = (buf[:-1]).view(B, T) # inputs
-        y = (buf[1:]).view(B, T) # targets
-        # advance the position in the tensor
-        self.current_position += B * T * self.num_processes
-        # if loading the next batch would be out of bounds, reset
-        if self.current_position + (B * T * self.num_processes + 1) > len(self.tokens):
-            self.current_position = self.B * self.T * self.process_rank
-        return x, y
+        x_list = []
+        y_list = []
+
+        for i in range(B):
+            if self.current_chunk >= len(self.chunks):
+                self.current_chunk = self.process_rank * self.B
+
+            chrom, start, end = self.chunks[self.current_chunk]
+            seq = self.fasta[chrom][start:end]
+            seq_str = str(seq)
+
+            encoded = self._encode_sequence(seq_str)
+            assert len(encoded) == T, f"Sequence length is {len(encoded)}, expected {T}"
+
+            x_tokens = encoded[:-1]
+            y_tokens = encoded[1:]
+
+            x_list.append(x_tokens)
+            y_list.append(y_tokens)
+
+            self.current_chunk += 1
+
+        self.current_chunk += (self.num_processes - 1) * B
+
+        x_tensor = torch.tensor(x_list, dtype=torch.long)
+        y_tensor = torch.tensor(y_list, dtype=torch.long)
+        return x_tensor, y_tensor
 
 # -----------------------------------------------------------------------------
 
@@ -267,8 +313,8 @@ if __name__ == "__main__":
 
     max_lr = 1e-4 #6e-4
     min_lr = max_lr * 0.5 # * 0.1
-    warmup_steps = 4735 # 10% of the total steps
-    max_steps =  47350 #94700 #13000 #360000
+    warmup_steps = 4735 #40% #10% of the total steps
+    max_steps = 11837 #47350 #94700 #13000 #360000
     def get_lr(it):
         # 1) linear warmup for warmup_iters steps
         if it < warmup_steps:
