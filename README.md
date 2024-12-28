@@ -3,8 +3,7 @@
 The simplest, fastest repository for training a small GPT on DNA sequences. It is inspired by [nanoGPT](https://github.com/karpathy/nanoGPT) by Andrej Karpathy, repurposed to explore the fascinating regulatory syntax of DNA. The goal here is to train a transformer model, much like nanoGPT, but not on Shakespeare or WebText—instead, on the human genome hg38. The model will learn the syntax and language of DNA, and help us uncover the intricate code underlying biological regulation. Work in progress!
 
 # Early Results
-dddd
-![Figure 1](/figures/output.png)
+![Figure 1](/figures/dibujo.png)
 
 **Figure 1:** Training Loss Curve During Pre-Training
 
@@ -14,9 +13,9 @@ Some early results from the pre-training phase of our DNA language model. This p
   
 - **Improved Stability**: Compared to earlier experimental rounds, this training setup is more robust, aided by conservative hyperparameter tuning and greater batch size.
 
-- **Peaks in Loss**: During training on repetitive sequences of the genome, the loss occasionally drops to zero. This indicates potential overfitting or memorization of these repetitive patterns, a phenomenon worth investigating in future iterations.
+- **Optimized Data Loading**: Perhaps the most significant improvement came from refactoring the DataLoader to train on curated BED-defined genomic regions. By excluding gaps and unmappable regions, we achieved better training stability and memory efficiency.
 
-This result aligns with similar efforts in DNA language modeling, such as the Nucleotide Transformer, and provides a promising foundation for further evaluations. Future assessments will involve benchmarks like DART-Eval.
+This result aligns with similar efforts in DNA language modeling, such as the Hyena DNA model, and provides a promising foundation for further evaluations. Future assessments will involve benchmarks like DART-Eval.
 
 ## Why nanoGPT-DNA?
 
