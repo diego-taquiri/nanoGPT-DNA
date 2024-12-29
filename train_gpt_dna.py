@@ -164,87 +164,152 @@ class GPT(nn.Module):
 
 
 class DataLoaderLite:
-    def __init__(self, B, T, process_rank, num_processes, bed_path="data/human-sequences.bed", fasta_path="data/hg38.ml.fa"):
+    def __init__(self, 
+                 B, T, 
+                 process_rank, num_processes, 
+                 bed_file='data/human-sequences.bed', 
+                 fasta_file='data/hg38.ml.fa', 
+                 split='train'):
         """
-        B: micro-batch size (# of sequences per batch)
-        T: sequence length (1024)
-        process_rank: index of current process (for DDP)
-        num_processes: total number of processes (for DDP)
-        bed_path: path to BED file specifying [chr, start, end, type]
-        fasta_path: path to FASTA file containing the reference genome
+        B: batch size (# rows in the returned x,y)
+        T: sequence length (# columns in the returned x,y)
+        process_rank: rank of this process in DDP
+        num_processes: total number of processes in DDP
+        bed_file: path to the bed file
+        fasta_file: path to the FASTA genome
+        split: 'train' or 'val'
         """
         self.B = B
         self.T = T
         self.process_rank = process_rank
         self.num_processes = num_processes
+        self.master_process = (self.process_rank == 0)
 
-        # Load BED file and process regions
-        df = pd.read_csv(bed_path, sep='\t', header=None, names=['chrom', 'start', 'end', 'type'])
-        self.chunks = []
-        for _, row in df.iterrows():
-            chrom, start, end, _type = row
-            region_length = end - start
-            if region_length < self.T:
+        # Prepare the DNA -> integer mapping
+        self.chars = ['A', 'C', 'G', 'T', 'N']
+        self.stoi = {ch: i for i, ch in enumerate(self.chars)}
+
+        # 1) Load BED and filter by split
+        df_bed = pd.read_csv(bed_file, sep='\t', header=None, names=['chrom','start','end','type'])
+        df_bed = df_bed[df_bed['type'] == split]
+        all_regions = df_bed[['chrom','start','end']].values.tolist()
+
+        # 2) Round-robin partitioning so each rank sees a disjoint subset of rows
+        #    e.g. rank 0 -> 0,2,4; rank 1 -> 1,3,5
+        self.my_rows = [i for i in range(len(all_regions)) if i % num_processes == process_rank]
+        self.regions = [all_regions[i] for i in self.my_rows]
+        self.num_regions = len(self.regions)
+
+        # 3) Open FASTA with pyfaidx
+        self.fasta = Fasta(fasta_file, as_raw=True)  # as_raw=True => returns a plain Python string
+
+        # 4) Offsets: track how far we have consumed each region (local to this rank’s subset)
+        self.region_offsets = []
+        for (chrom, start, end) in self.regions:
+            self.region_offsets.append(start)
+
+        # 5) current_region_idx is local to our subset
+        self.current_region_idx = 0
+        self.cycle_through = True  # whether to loop back after the last region
+
+    def reset(self):
+        """ Reset iteration for this DataLoader's subset of regions. """
+        self.current_region_idx = 0
+        for i, (chrom, start, end) in enumerate(self.regions):
+            self.region_offsets[i] = start
+
+    def _get_region_sequence(self, chrom, start, end):
+        """
+        Use pyfaidx to fetch (start, end) from chrom, then convert to integer tokens via self.stoi.
+        With as_raw=True, self.fasta[chrom][start:end] is already a string.
+        """
+        seq_str = self.fasta[chrom][start:end]
+        return [self.stoi[c] for c in seq_str]
+
+    def _collect_batch_tokens(self, n_tokens_needed):
+        """
+        Collect up to n_tokens_needed from our local subset of regions.
+        If a region is partially used, continue exactly where left off.
+        """
+        collected = []
+
+        #if self.master_process:
+        print(f"[Rank {self.process_rank}] _collect_batch_tokens: need {n_tokens_needed} tokens")
+
+        while len(collected) < n_tokens_needed:
+            if self.current_region_idx >= self.num_regions:
+                # If we've used up all our assigned regions
+                if self.cycle_through:
+                    #if self.master_process:
+                    print(f"[Rank {self.process_rank}] Wrapping around to region index 0.")
+                    self.current_region_idx = 0
+                else:
+                    #if self.master_process:
+                    print(f"[Rank {self.process_rank}] No more regions to process. Breaking.")
+                    break
+
+            chrom, region_start, region_end = self.regions[self.current_region_idx]
+            offset = self.region_offsets[self.current_region_idx]
+            region_length = region_end - offset
+
+            #if self.master_process:
+            print(f"[Rank {self.process_rank}] Region {self.current_region_idx}: (chrom={chrom}, "
+                      f"start={region_start}, end={region_end}, offset={offset}, length={region_length})")
+
+            if region_length <= 0:
+                #if self.master_process:
+                print(f"[Rank {self.process_rank}] Region {self.current_region_idx} fully consumed, next region.")
+                self.current_region_idx += 1
                 continue
-            num_chunks = region_length // self.T
-            for i in range(num_chunks):
-                chunk_start = start + i * self.T
-                chunk_end = chunk_start + self.T
-                self.chunks.append((chrom, chunk_start, chunk_end))
 
-        # Initialize FASTA reader
-        self.fasta = Fasta(fasta_path, as_raw=True, sequence_always_upper=True)
+            needed = n_tokens_needed - len(collected)
+            fetch_end = min(offset + needed, region_end)
 
-        # Create DNA -> integer mapping
-        chars = ['A', 'C', 'G', 'N', 'T']
-        self.stoi = {ch: i for i, ch in enumerate(chars)}
+            #if self.master_process:
+            print(f"[Rank {self.process_rank}] Fetch from {chrom}[{offset}:{fetch_end}] "
+                      f"(needed={needed}, have={len(collected)})")
 
-        # Set starting chunk for this process
-        self.current_chunk = self.process_rank * self.B
+            # Fetch tokens
+            region_tokens = self._get_region_sequence(chrom, offset, fetch_end)
+            collected.extend(region_tokens)
 
-        if 'master_process' in globals() and master_process:
-            print(f"DataLoaderLite: loaded {len(self.chunks)} total 1024bp chunks from BED regions.")
+            # Update offset
+            new_offset = offset + len(region_tokens)
+            self.region_offsets[self.current_region_idx] = new_offset
 
-    def _encode_sequence(self, seq):
-        """Convert DNA sequence to integer tokens"""
-        out = []
-        for ch in seq:
-            if ch in self.stoi:
-                out.append(self.stoi[ch])
-            else:
-                out.append(self.stoi['N'])
-        return out
+            # If region is fully consumed, move on
+            if new_offset >= region_end:
+                #if self.master_process:
+                print(f"[Rank {self.process_rank}] Region {self.current_region_idx} consumed, advance.")
+                self.current_region_idx += 1
+
+        #if self.master_process:
+        print(f"[Rank {self.process_rank}] Finished collecting: {len(collected)} tokens.")
+        return collected
 
     def next_batch(self):
-        """Returns x, y tensors of shape (B, T) for training"""
+        """
+        Returns x, y of shape (B, T).
+        We need B*T + 1 tokens total.
+        """
         B, T = self.B, self.T
-        x_list = []
-        y_list = []
+        n_needed = B * T + 1
 
-        for i in range(B):
-            if self.current_chunk >= len(self.chunks):
-                self.current_chunk = self.process_rank * self.B
+        buf = self._collect_batch_tokens(n_needed)
+        if len(buf) < n_needed:
+            # attempt one reset
+            self.reset()
+            buf = self._collect_batch_tokens(n_needed)
+            if len(buf) < n_needed:
+                # if still short, return what we have or raise error
+                pass
 
-            chrom, start, end = self.chunks[self.current_chunk]
-            seq = self.fasta[chrom][start:end]
-            seq_str = str(seq)
+        buf = buf[:n_needed]
+        buf_t = torch.tensor(buf, dtype=torch.long)
 
-            encoded = self._encode_sequence(seq_str)
-            assert len(encoded) == T, f"Sequence length is {len(encoded)}, expected {T}"
-
-            x_tokens = encoded[:-1]
-            y_tokens = encoded[1:]
-
-            x_list.append(x_tokens)
-            y_list.append(y_tokens)
-
-            self.current_chunk += 1
-
-        self.current_chunk += (self.num_processes - 1) * B
-
-        x_tensor = torch.tensor(x_list, dtype=torch.long)
-        y_tensor = torch.tensor(y_list, dtype=torch.long)
-        return x_tensor, y_tensor
+        x = buf_t[:-1].view(B, T)
+        y = buf_t[1:].view(B, T)
+        return x, y
 
 # -----------------------------------------------------------------------------
 
@@ -300,6 +365,7 @@ if __name__ == "__main__":
         print(f"=> calculated gradient accumulation steps: {grad_accum_steps}")
 
     train_loader = DataLoaderLite(B=B, T=T, process_rank=ddp_rank, num_processes=ddp_world_size)
+    val_loader   = DataLoaderLite(B=B, T=T, process_rank=ddp_rank, num_processes=ddp_world_size, split="valid")
 
     torch.set_float32_matmul_precision('high')
 
@@ -313,7 +379,7 @@ if __name__ == "__main__":
 
     max_lr = 1e-4 #6e-4
     min_lr = max_lr * 0.5 # * 0.1
-    warmup_steps = 4735 #40% #10% of the total steps
+    warmup_steps = 1000 #40% #10% of the total steps
     max_steps = 11837 #47350 #94700 #13000 #360000
     def get_lr(it):
         # 1) linear warmup for warmup_iters steps
@@ -338,10 +404,40 @@ if __name__ == "__main__":
     
     # Create/overwrite TSV file with headers
     with open(tsv_path, 'w') as f:
-        f.write("step\tloss\tnorm\tlr\n")
+        f.write("step\tloss\tnorm\tlr\ttype\n")
 
     for step in range(max_steps):
         t0 = time.time()
+        # ----------- (1) Validation every N steps -----------
+        if step % 100 == 0:
+            model.eval()
+            val_loader.reset()
+
+            with torch.no_grad():
+                val_loss_accum = 0.0
+                val_loss_steps = 20  # how many val batches we average over
+                for _ in range(val_loss_steps):
+                    x, y = val_loader.next_batch()
+                    x, y = x.to(device), y.to(device)
+                    with torch.autocast(device_type=device, dtype=torch.bfloat16):
+                        logits, loss = model(x, y)
+                    # accumulate
+                    loss = loss / val_loss_steps
+                    val_loss_accum += loss.detach()
+
+            if ddp:
+                # average across all ranks
+                dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG)
+
+            # only rank 0 prints and logs
+            if master_process:
+                print(f"step {step:4d} | validation loss: {val_loss_accum:.4f}")
+                # Log validation loss
+                with open(tsv_path, 'a') as f:
+                    f.write(f"{step}\t{val_loss_accum:.6f}\t\t\tval\n")
+
+        # ----------- (2) Training Step -----------
+        model.train()
         optimizer.zero_grad()
         #import code; code.interact(local=locals())
         loss_accum = 0.0
@@ -371,7 +467,7 @@ if __name__ == "__main__":
         if master_process:
             print(f"step {step:4d} | loss: {loss_accum.item():.6f} | lr {lr:.4e} | norm: {norm:.4f} | dt: {dt*1000:.2f}ms | tok/sec: {tokens_per_sec:.2f}")
             with open(tsv_path, 'a') as f:
-                f.write(f"{step}\t{loss_accum.item()}\t{norm:.4f}\t{lr:.4e}\n")
+                f.write(f"{step}\t{loss_accum.item()}\t{norm:.4f}\t{lr:.4e}\ttrain\n")
     if ddp:
         destroy_process_group()    
 
