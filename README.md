@@ -5,9 +5,13 @@ Training a small GPT on DNA sequences. It is inspired by [nanoGPT](https://githu
 # Early Results
 ![Figure 1](/figures/1st-good-run.png)
 
-**Figure 1:** Training Loss Curve During Pre-Training
+**Figure 1:**  Training/Validation Loss Curve During Pre-Training on 85M-Parameter Model Trained Over 13 Billion Tokens
 
-Some early results from the pre-training phase of our 85M params DNA language model. This phase employs a batch size of 1 million tokens per step, a less conservative learning rate, and gradient accumulation with Distributed Data Parallelization (DDP) across two NVIDIA RTX 4090 GPUs. The model is trained autoregressively on the human genome, hg38, leveraging tokenization at the nucleotide level.
+![Figure 2](/figures/dart-eval-results1.png)
+
+**Figure 2:** DART-Eval Accuracy Comparison for Regulatory vs. Shuffled Control Sequences
+
+The model is pre-trained using a self-supervised task of Next Token Prediction, where it learns to predict the next nucleotide in a sequence. This task enables the model to capture the statistical dependencies, syntax, and patterns of DNA. Some early results from the pre-training phase of our 85M params DNA language model. This phase employs a batch size of 1 million tokens per step, a less conservative learning rate, and gradient accumulation with Distributed Data Parallelization (DDP) across two NVIDIA RTX 4090 GPUs. The model is trained autoregressively on the human genome, hg38, leveraging tokenization at the nucleotide level.
 
 - **Loss Decreasing**: The training loss demonstrates a stable and consistent decrease, signaling effective learning. With an initial warming phase for the loss, the model adjusts smoothly to the task.
   
@@ -15,7 +19,30 @@ Some early results from the pre-training phase of our 85M params DNA language mo
 
 - **Optimized Data Loading**: Perhaps the most significant improvement came from refactoring the DataLoader to train on curated BED-defined genomic regions. By excluding gaps and unmappable regions, we achieved better training stability and memory efficiency.
 
-This pretraining curve aligns with similar efforts in DNA language modeling, such as the Hyena DNA model, and provides a promising foundation for further evaluations. Future assessments will involve benchmarks like DART-Eval.
+
+### DART-Eval Benchmark Results
+
+The DART-Eval benchmark evaluates the ability of DNA language models to differentiate between regulatory sequences and shuffled control sequences. This task leverages the model’s understanding of DNA syntax and statistical patterns to assign higher likelihoods to true regulatory sequences. By training on the entire human genome, hg38, we expect the model to learn both regulatory and non-regulatory sequences. Given that only 2% of the genome consists of coding regions, this pre-training equips the model to differentiate between regulatory elements and non-regulatory regions.
+
+Key observations:
+
+- **Benchmark Performance**: Our model achieved an accuracy of **0.64**, demonstrating non-random performance (random baseline = 0.5). While not yet state-of-the-art (e.g., Nucleotide Transformer: 0.745), these results are promising for a first evaluation.
+
+- **Model Understanding**: This performance reflects the model’s capacity to learn the dependencies and patterns in the human genome, including differentiating regulatory from non-regulatory sequences.
+
+- **Comparison**: Figure 2 highlights the accuracy of our model against several DNA language models, showing competitive early results despite limited training time and model scale. Further tuning and scaling could improve these outcomes.
+
+---
+
+### Future Directions
+
+Several strategies will be explored to enhance model performance:
+
+- **Extended Training**: Increasing training time to allow for further refinement of learned patterns.
+- **Scaling Parameters**: Testing larger model sizes to capture more complex genomic structures.
+- **Hyperparameter Optimization**: Systematic tuning of the learning rate, batch size, and other hyperparameters.
+- **Randomized Epochs**: Introducing more variability in training data to prevent overfitting.
+- **Advanced Benchmarks**: Expanding evaluations to include additional datasets and benchmarks.
 
 ## Why nanoGPT-DNA?
 
@@ -45,30 +72,10 @@ For context, a bigram model uses only the most recent nucleotide to predict the 
 
 We're keeping tokenization extremely simple—it's just at the nucleotide level (A, T, C, G). No byte-pair encoding, no k-mer style segmentation. It's fundamental, but this level of granularity is perfectly suited for DNA data.
 
-## Installation
-
-```bash
-pip install torch numpy
-```
-
-### Dependencies:
-
-- PyTorch
-- numpy
-
-### Hardware
-
-The GPU that we are going to use to train these models, for now, is as follows:
-
-We are lucky to have two NVIDIA RTX 4090 GPUs in our lab, the [Mirko Zimic Lab](https://scholar.google.com/citations?hl=en&user=J7KkjscAAAAJ&view_op=list_works&sortby=pubdate). These GPUs provide us with ample power for our initial training runs and allow us to iterate quickly. Additionally, we have access to a Tesla T4 GPU through my personal AWS account in the cloud. While the T4 is not as powerful as the RTX 4090s, it serves as a backup—though, due to the hourly cost and lower performance, it will be used sparingly, likely only for final evaluations or small-scale experiments.
-
-It is very challenging to obtain access to A100 GPUs in AWS. I barely even managed to secure a Tesla T4 instance, let alone something more powerful like an 8xA100 node. The demand for GPUs is incredible, and AI even won two Nobel Prizes this year—it's a crazy time for the field! For now, we'll stick to the RTX 4090s, as they are already set up and offer cost-effective and readily available power for our purposes.
-
-### Future Directions
+### Long-term Directions
 
 - Experimenting with training larger models, adding more transformer layers, and increasing the model size iteratively.
 - Expanding training data to include other genomes, or even cross-species genomic data, to improve the model's understanding of broader genomic contexts.
-- Introducing more advanced evaluation tasks, beyond Task 1 of [DART-Eval](https://github.com/kundajelab/dart-eval), to probe deeper regulatory understanding.
 - Exploring finetuning on smaller-scale datasets of specific genomic regions or features.
 
 ### Acknowledgements
