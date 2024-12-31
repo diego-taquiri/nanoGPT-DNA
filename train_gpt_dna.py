@@ -233,18 +233,18 @@ class DataLoaderLite:
         """
         collected = []
 
-        #if self.master_process:
         print(f"[Rank {self.process_rank}] _collect_batch_tokens: need {n_tokens_needed} tokens")
 
         while len(collected) < n_tokens_needed:
             if self.current_region_idx >= self.num_regions:
-                # If we've used up all our assigned regions
+                # All regions are exhausted
                 if self.cycle_through:
-                    #if self.master_process:
-                    print(f"[Rank {self.process_rank}] Wrapping around to region index 0.")
+                    print(f"[Rank {self.process_rank}] Wrapping around to region index 0. Resetting offsets.")
+                    # Reset all offsets to start processing regions again
+                    for i, (chrom, start, end) in enumerate(self.regions):
+                        self.region_offsets[i] = start
                     self.current_region_idx = 0
                 else:
-                    #if self.master_process:
                     print(f"[Rank {self.process_rank}] No more regions to process. Breaking.")
                     break
 
@@ -252,12 +252,7 @@ class DataLoaderLite:
             offset = self.region_offsets[self.current_region_idx]
             region_length = region_end - offset
 
-            #if self.master_process:
-            print(f"[Rank {self.process_rank}] Region {self.current_region_idx}: (chrom={chrom}, "
-                      f"start={region_start}, end={region_end}, offset={offset}, length={region_length})")
-
             if region_length <= 0:
-                #if self.master_process:
                 print(f"[Rank {self.process_rank}] Region {self.current_region_idx} fully consumed, next region.")
                 self.current_region_idx += 1
                 continue
@@ -265,9 +260,8 @@ class DataLoaderLite:
             needed = n_tokens_needed - len(collected)
             fetch_end = min(offset + needed, region_end)
 
-            #if self.master_process:
             print(f"[Rank {self.process_rank}] Fetch from {chrom}[{offset}:{fetch_end}] "
-                      f"(needed={needed}, have={len(collected)})")
+                f"(needed={needed}, have={len(collected)})")
 
             # Fetch tokens
             region_tokens = self._get_region_sequence(chrom, offset, fetch_end)
@@ -279,13 +273,12 @@ class DataLoaderLite:
 
             # If region is fully consumed, move on
             if new_offset >= region_end:
-                #if self.master_process:
                 print(f"[Rank {self.process_rank}] Region {self.current_region_idx} consumed, advance.")
                 self.current_region_idx += 1
 
-        #if self.master_process:
         print(f"[Rank {self.process_rank}] Finished collecting: {len(collected)} tokens.")
         return collected
+
 
     def next_batch(self):
         """
@@ -377,9 +370,9 @@ if __name__ == "__main__":
         model = DDP(model, device_ids=[ddp_local_rank])
         raw_model = model.module if ddp else model # always contains the "raw" unwrapped model
 
-    max_lr = 1e-4 #6e-4
-    min_lr = max_lr * 0.5 # * 0.1
-    warmup_steps = 1000 #40% #10% of the total steps
+    max_lr = 2.5e-4 #6e-4
+    min_lr = max_lr * 0.4 # * 0.1
+    warmup_steps = 500 #40% #10% of the total steps
     max_steps = 11837 #47350 #94700 #13000 #360000
     def get_lr(it):
         # 1) linear warmup for warmup_iters steps
