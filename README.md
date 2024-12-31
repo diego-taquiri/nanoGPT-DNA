@@ -1,21 +1,21 @@
 # nanoGPT-DNA
 
-The simplest, fastest repository for training a small GPT on DNA sequences. It is inspired by [nanoGPT](https://github.com/karpathy/nanoGPT) by Andrej Karpathy, repurposed to explore the fascinating regulatory syntax of DNA. The goal here is to train a transformer model, much like nanoGPT, but not on Shakespeare or WebText—instead, on the human genome hg38. The model will learn the syntax and language of DNA, and help us uncover the intricate code underlying biological regulation. Work in progress!
+Training a small GPT on DNA sequences. It is inspired by [nanoGPT](https://github.com/karpathy/nanoGPT) by Andrej Karpathy, repurposed to explore the  regulatory syntax of DNA. The goal here is to train a transformer model, much like nanoGPT, but not on Shakespeare or WebText—instead, on the human genome hg38. The model will learn the syntax and language of DNA, and help us uncover the code underlying biological regulation. Work in progress!
 
 # Early Results
-![Figure 1](/figures/dibujo.png)
+![Figure 1](/figures/1st-good-run.png)
 
 **Figure 1:** Training Loss Curve During Pre-Training
 
-Some early results from the pre-training phase of our DNA language model. This phase employs a batch size of 1 million tokens, a conservative learning rate, and gradient accumulation with Distributed Data Parallelization (DDP) across two NVIDIA RTX 4090 GPUs. The model is trained autoregressively on the entire human genome, hg38, leveraging tokenization at the nucleotide level.
+Some early results from the pre-training phase of our 85M params DNA language model. This phase employs a batch size of 1 million tokens per step, a less conservative learning rate, and gradient accumulation with Distributed Data Parallelization (DDP) across two NVIDIA RTX 4090 GPUs. The model is trained autoregressively on the human genome, hg38, leveraging tokenization at the nucleotide level.
 
 - **Loss Decreasing**: The training loss demonstrates a stable and consistent decrease, signaling effective learning. With an initial warming phase for the loss, the model adjusts smoothly to the task.
   
-- **Improved Stability**: Compared to earlier experimental rounds, this training setup is more robust, aided by conservative hyperparameter tuning and greater batch size.
+- **Improved Stability**: Compared to earlier experimental rounds, this training setup is more robust, aided by hyperparameter tuning and greater batch size.
 
 - **Optimized Data Loading**: Perhaps the most significant improvement came from refactoring the DataLoader to train on curated BED-defined genomic regions. By excluding gaps and unmappable regions, we achieved better training stability and memory efficiency.
 
-This result aligns with similar efforts in DNA language modeling, such as the Hyena DNA model, and provides a promising foundation for further evaluations. Future assessments will involve benchmarks like DART-Eval.
+This pretraining curve aligns with similar efforts in DNA language modeling, such as the Hyena DNA model, and provides a promising foundation for further evaluations. Future assessments will involve benchmarks like DART-Eval.
 
 ## Why nanoGPT-DNA?
 
