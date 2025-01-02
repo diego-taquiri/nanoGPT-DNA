@@ -9,6 +9,7 @@ from torch.nn import functional as F
 import os
 import pandas as pd
 from pyfaidx import Fasta
+import datetime
 
 # -----------------------------------------------------------------------------
 
@@ -164,21 +165,13 @@ class GPT(nn.Module):
 
 
 class DataLoaderLite:
+
     def __init__(self, 
                  B, T, 
                  process_rank, num_processes, 
                  bed_file='data/human-sequences.bed', 
                  fasta_file='data/hg38.ml.fa', 
                  split='train'):
-        """
-        B: batch size (# rows in the returned x,y)
-        T: sequence length (# columns in the returned x,y)
-        process_rank: rank of this process in DDP
-        num_processes: total number of processes in DDP
-        bed_file: path to the bed file
-        fasta_file: path to the FASTA genome
-        split: 'train' or 'val'
-        """
         self.B = B
         self.T = T
         self.process_rank = process_rank
@@ -233,19 +226,19 @@ class DataLoaderLite:
         """
         collected = []
 
-        print(f"[Rank {self.process_rank}] _collect_batch_tokens: need {n_tokens_needed} tokens")
+        #print(f"[Rank {self.process_rank}] _collect_batch_tokens: need {n_tokens_needed} tokens")
 
         while len(collected) < n_tokens_needed:
             if self.current_region_idx >= self.num_regions:
                 # All regions are exhausted
                 if self.cycle_through:
-                    print(f"[Rank {self.process_rank}] Wrapping around to region index 0. Resetting offsets.")
+                    #print(f"[Rank {self.process_rank}] Wrapping around to region index 0. Resetting offsets.")
                     # Reset all offsets to start processing regions again
                     for i, (chrom, start, end) in enumerate(self.regions):
                         self.region_offsets[i] = start
                     self.current_region_idx = 0
                 else:
-                    print(f"[Rank {self.process_rank}] No more regions to process. Breaking.")
+                    #print(f"[Rank {self.process_rank}] No more regions to process. Breaking.")
                     break
 
             chrom, region_start, region_end = self.regions[self.current_region_idx]
@@ -253,15 +246,15 @@ class DataLoaderLite:
             region_length = region_end - offset
 
             if region_length <= 0:
-                print(f"[Rank {self.process_rank}] Region {self.current_region_idx} fully consumed, next region.")
+                #print(f"[Rank {self.process_rank}] Region {self.current_region_idx} fully consumed, next region.")
                 self.current_region_idx += 1
                 continue
 
             needed = n_tokens_needed - len(collected)
             fetch_end = min(offset + needed, region_end)
 
-            print(f"[Rank {self.process_rank}] Fetch from {chrom}[{offset}:{fetch_end}] "
-                f"(needed={needed}, have={len(collected)})")
+            #print(f"[Rank {self.process_rank}] Fetch from {chrom}[{offset}:{fetch_end}] "
+            #    f"(needed={needed}, have={len(collected)})")
 
             # Fetch tokens
             region_tokens = self._get_region_sequence(chrom, offset, fetch_end)
@@ -273,10 +266,10 @@ class DataLoaderLite:
 
             # If region is fully consumed, move on
             if new_offset >= region_end:
-                print(f"[Rank {self.process_rank}] Region {self.current_region_idx} consumed, advance.")
+                #print(f"[Rank {self.process_rank}] Region {self.current_region_idx} consumed, advance.")
                 self.current_region_idx += 1
 
-        print(f"[Rank {self.process_rank}] Finished collecting: {len(collected)} tokens.")
+        #print(f"[Rank {self.process_rank}] Finished collecting: {len(collected)} tokens.")
         return collected
 
 
@@ -346,6 +339,11 @@ if __name__ == "__main__":
     if torch.cuda.is_available():
         torch.cuda.manual_seed(1337)
 
+    # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
+    init_from = "resume"  # or "scratch"
+    best_val_loss = float('inf')
+    save_interval = 100
+
     #total_batch_size = 524288 # 2**19, ~0.5M, in number of tokens
     #total_batch_size = 589824  # Adjusted to be divisible by B * T * ddp_world_size, 48 * 1024 * 2
     total_batch_size = 1179648 #2**20 #2^20, ~1M, in number of tokens,  48 * 1024 * 2 * 12
@@ -370,10 +368,10 @@ if __name__ == "__main__":
         model = DDP(model, device_ids=[ddp_local_rank])
         raw_model = model.module if ddp else model # always contains the "raw" unwrapped model
 
-    max_lr = 2.5e-4 #6e-4
-    min_lr = max_lr * 0.4 # * 0.1
-    warmup_steps = 500 #40% #10% of the total steps
-    max_steps = 11837 #47350 #94700 #13000 #360000
+    max_lr = 6e-4 #2.5e-4 #6e-4
+    min_lr = 1e-4#max_lr * 0.4 # * 0.1
+    warmup_steps = 1000 #40% #10% of the total steps
+    max_steps = 177882 #1 semana #47350 #94700 #13000 #360000
     def get_lr(it):
         # 1) linear warmup for warmup_iters steps
         if it < warmup_steps:
@@ -386,7 +384,7 @@ if __name__ == "__main__":
         assert 0 <= decay_ratio <= 1
         coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff starts at 1 and goes to 0
         return min_lr + coeff * (max_lr - min_lr)
-
+    
     # optimize!
     optimizer = raw_model.configure_optimizers(weight_decay=0.1, learning_rate=1e-4, device=device)
 
@@ -395,12 +393,30 @@ if __name__ == "__main__":
     os.makedirs(log_dir, exist_ok=True)
     tsv_path = os.path.join(log_dir, "training_loss.tsv")
     
-    # Create/overwrite TSV file with headers
-    with open(tsv_path, 'w') as f:
-        f.write("step\tloss\tnorm\tlr\ttype\n")
+    # Check if file exists; if not, create it with headers
+    file_exists = os.path.exists(tsv_path)
+    if not file_exists:
+        with open(tsv_path, 'w') as f:
+            f.write("step\tloss\tnorm\tlr\ttype\trun_checkpoint\n")
+    current_run_time = datetime.datetime.now().strftime("%Y-%m-%d_%H:%M")
 
-    for step in range(max_steps):
+    # CHECKPOINT LOADING IF RESUME
+    start_step = 0
+    if init_from == "resume":
+        checkpoint_path = os.path.join(log_dir, "latest_checkpoint.pt")
+        if os.path.exists(checkpoint_path):
+            checkpoint = torch.load(checkpoint_path, map_location=device)
+            raw_model.load_state_dict(checkpoint['model'])
+            optimizer.load_state_dict(checkpoint['optimizer'])
+            start_step = checkpoint['step'] + 1
+            best_val_loss = checkpoint.get('best_val_loss', float('inf'))
+            print(f"Resumed training from step {start_step}, best_val_loss={best_val_loss:.4f}")
+        else:
+            print("No checkpoint found, starting from scratch.")
+
+    for step in range(start_step, max_steps):
         t0 = time.time()
+        last_step = (step == max_steps - 1)
         # ----------- (1) Validation every N steps -----------
         if step % 100 == 0:
             model.eval()
@@ -427,7 +443,24 @@ if __name__ == "__main__":
                 print(f"step {step:4d} | validation loss: {val_loss_accum:.4f}")
                 # Log validation loss
                 with open(tsv_path, 'a') as f:
-                    f.write(f"{step}\t{val_loss_accum:.6f}\t\t\tval\n")
+                    f.write(f"{step}\t{val_loss_accum:.6f}\t\t\tval\t{current_run_time}_checkpoint\n")
+                
+                # Save if val loss improved or at save interval
+                improved = val_loss_accum < best_val_loss
+                if improved and (step > 0 and step % save_interval == 0):
+                    # Update the best validation loss
+                    best_val_loss = val_loss_accum
+
+                    checkpoint_path = os.path.join(log_dir, "latest_checkpoint.pt")
+                    checkpoint = {
+                        'model': raw_model.state_dict(),
+                        'optimizer': optimizer.state_dict(),
+                        'step': step,
+                        'best_val_loss': best_val_loss,
+                        'model': raw_model.state_dict(),
+                    }
+                    torch.save(checkpoint, checkpoint_path)
+                    print(f"Saved checkpoint to {checkpoint_path}")
 
         # ----------- (2) Training Step -----------
         model.train()
@@ -460,16 +493,6 @@ if __name__ == "__main__":
         if master_process:
             print(f"step {step:4d} | loss: {loss_accum.item():.6f} | lr {lr:.4e} | norm: {norm:.4f} | dt: {dt*1000:.2f}ms | tok/sec: {tokens_per_sec:.2f}")
             with open(tsv_path, 'a') as f:
-                f.write(f"{step}\t{loss_accum.item()}\t{norm:.4f}\t{lr:.4e}\ttrain\n")
+                f.write(f"{step}\t{loss_accum.item()}\t{norm:.4f}\t{lr:.4e}\ttrain\t{current_run_time}_checkpoint\n")
     if ddp:
         destroy_process_group()    
-
-    # Save final model
-    out = {
-        'model': model.state_dict(),
-        'config': raw_model.config,  # Use raw_model instead of model
-    }
-    model_path = os.path.join(log_dir, "model.pt")
-    if master_process:  # Only save on the master process
-        torch.save(out, model_path)
-        print(f"saved model to {model_path}")
